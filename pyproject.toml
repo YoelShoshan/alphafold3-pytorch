@@ -1,9 +1,10 @@
 [project]
 name = "alphafold3-pytorch"
-version = "0.2.76"
+version = "0.2.119"
 description = "Alphafold 3 - Pytorch"
 authors = [
-    { name = "Phil Wang", email = "lucidrains@gmail.com" }
+    { name = "Phil Wang", email = "lucidrains@gmail.com" },
+    { name = "Alex Morehead", email = "alex.morehead@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">= 3.8"
@@ -45,8 +46,10 @@ dependencies = [
     "pyyaml",
     "rdkit>=2023.9.6",
     "scikit-learn>=1.5.0",
+    "sh>=2.0.7",
     "shortuuid",
-    "taylor-series-linear-attention>=0.1.9",
+    "tensorboard",
+    "taylor-series-linear-attention>=0.1.11",
     "timeout_decorator>=0.5.0",
     'torch_geometric',
     "torch>=2.1",
@@ -62,7 +65,7 @@ Repository = "https://github.com/lucidrains/alphafold3-pytorch"
 examples = []
 test = [
     "pytest",
-    "pytest-split-tests",
+    "pytest-shard",
 ]
 
 [build-system]

@@ -89,12 +89,13 @@ def test_alphafold3_input(directed_bonds):
 
     alphafold3 = Alphafold3(
         dim_atom_inputs = 3,
-        dim_atompair_inputs = 1,
+        dim_atompair_inputs = 5,
         num_atom_embeds = 47,
         num_atompair_embeds = num_atom_bond_types + 1, # 0 is for no bond
         atoms_per_window = 27,
         dim_template_feats = 44,
         num_dist_bins = 38,
+        num_molecule_mods = 0,
         confidence_head_kwargs = dict(
             pairformer_depth = 1
         ),
@@ -114,7 +115,7 @@ def test_alphafold3_input(directed_bonds):
         )
     )
 
-    alphafold3(**batched_atom_input.dict(), num_sample_steps = 1)
+    alphafold3(**batched_atom_input.model_forward_dict(), num_sample_steps = 1)
 
 def test_atompos_input():
 
@@ -143,10 +144,11 @@ def test_atompos_input():
 
     alphafold3 = Alphafold3(
         dim_atom_inputs = 3,
-        dim_atompair_inputs = 1,
+        dim_atompair_inputs = 5,
         atoms_per_window = 27,
         dim_template_feats = 44,
         num_dist_bins = 38,
+        num_molecule_mods = 0,
         confidence_head_kwargs = dict(
             pairformer_depth = 1
         ),
@@ -166,7 +168,7 @@ def test_atompos_input():
         )
     )
 
-    loss = alphafold3(**batched_atom_input.dict())
+    loss = alphafold3(**batched_atom_input.model_forward_dict())
     loss.backward()
 
     # sampling
@@ -174,7 +176,7 @@ def test_atompos_input():
     batched_eval_atom_input = alphafold3_inputs_to_batched_atom_input(eval_alphafold3_input, atoms_per_window = 27)
 
     alphafold3.eval()
-    sampled_atom_pos = alphafold3(**batched_eval_atom_input.dict(), return_loss=False)
+    sampled_atom_pos = alphafold3(**batched_eval_atom_input.model_forward_dict(), return_loss=False)
 
     assert sampled_atom_pos.shape == (1, (5 + 4), 3)
 
@@ -186,7 +188,17 @@ def test_pdbinput_input():
     if os.path.exists(filepath.replace(".cif", "-sampled.cif")):
         os.remove(filepath.replace(".cif", "-sampled.cif"))
 
-    train_pdb_input = PDBInput(filepath, training=True)
+    train_pdb_input = PDBInput(
+        filepath,
+        chains=("A", "B"),
+        cropping_config={
+            "contiguous_weight": 0.2,
+            "spatial_weight": 0.4,
+            "spatial_interface_weight": 0.4,
+            "n_res": 384,
+        },
+        training=True,
+    )
 
     eval_pdb_input = PDBInput(filepath)
 
@@ -202,10 +214,11 @@ def test_pdbinput_input():
         dim_pairwise=8,
         dim_token=8,
         dim_atom_inputs=3,
-        dim_atompair_inputs=1,
+        dim_atompair_inputs=5,
         atoms_per_window=27,
         dim_template_feats=44,
         num_dist_bins=38,
+        num_molecule_mods=4,
         confidence_head_kwargs=dict(pairformer_depth=1),
         template_embedder_kwargs=dict(pairformer_stack_depth=1),
         msa_module_kwargs=dict(depth=1),
@@ -231,7 +244,7 @@ def test_pdbinput_input():
         ),
     )
 
-    loss = alphafold3(**batched_atom_input.dict())
+    loss = alphafold3(**batched_atom_input.model_forward_dict())
     loss.backward()
 
     # sampling
@@ -240,22 +253,27 @@ def test_pdbinput_input():
 
     alphafold3.eval()
 
+    batch_dict = batched_eval_atom_input.model_forward_dict()
     sampled_atom_pos = alphafold3(
-        **batched_eval_atom_input.dict(), return_loss=False, return_present_sampled_atoms=True
+        **batch_dict,
+        return_loss=False,
     )
 
-    assert sampled_atom_pos.shape == (4155, 3)
+    batched_atom_mask = ~batch_dict["missing_atom_mask"]
+    sampled_atom_positions = sampled_atom_pos[batched_atom_mask].cpu().numpy()
+
+    assert sampled_atom_positions.shape == (4155, 3)
 
     # visualizing
 
     mmcif_writing.write_mmcif_from_filepath_and_id(
-        filepath=filepath,
+        input_filepath=filepath,
+        output_filepath=filepath.replace(".cif", "-sampled.cif"),
         file_id=file_id,
-        suffix="sampled",
         gapless_poly_seq=True,
         insert_orig_atom_names=True,
         insert_alphafold_mmcif_metadata=True,
-        sampled_atom_positions=sampled_atom_pos.cpu().numpy(),
+        sampled_atom_positions=sampled_atom_positions,
     )
 
     assert os.path.exists(filepath.replace(".cif", "-sampled.cif"))

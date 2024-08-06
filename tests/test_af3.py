@@ -4,9 +4,12 @@ os.environ['TYPECHECK'] = 'True'
 import pytest
 import random
 import itertools
+import subprocess
 from pathlib import Path
 
 import torch
+
+from collections import namedtuple
 
 from alphafold3_pytorch import (
     SmoothLDDTLoss,
@@ -30,6 +33,7 @@ from alphafold3_pytorch import (
     ConfidenceHeadLogits,
     ComputeModelSelectionScore,
     ComputeModelSelectionScore,
+    collate_inputs_to_batched_atom_input
 )
 
 from alphafold3_pytorch.configs import (
@@ -39,13 +43,21 @@ from alphafold3_pytorch.configs import (
 
 from alphafold3_pytorch.alphafold3 import (
     mean_pool_with_lens,
-    repeat_consecutive_with_lens,
+    batch_repeat_interleave,
     full_pairwise_repr_to_windowed,
-    atom_ref_pos_to_atompair_inputs
+    get_cid_molecule_type,
 )
 
 from alphafold3_pytorch.inputs import (
-    IS_MOLECULE_TYPES
+    IS_MOLECULE_TYPES,
+    IS_PROTEIN,
+    atom_ref_pos_to_atompair_inputs,
+    molecule_to_atom_input,
+    pdb_input_to_molecule_input,
+    PDBInput,
+    PDBDataset,
+    default_extract_atom_feats_fn,
+    default_extract_atompair_feats_fn
 )
 
 def test_atom_ref_pos_to_atompair_inputs():
@@ -63,10 +75,10 @@ def test_mean_pool_with_lens():
 
     assert torch.allclose(pooled, torch.tensor([[[1.], [2.], [1.]]]))
 
-def test_repeat_consecutive_with_lens():
+def test_batch_repeat_interleave():
     seq = torch.tensor([[[1.], [2.], [4.]], [[1.], [2.], [4.]]])
     lens = torch.tensor([[3, 4, 2], [2, 5, 1]]).long()
-    repeated = repeat_consecutive_with_lens(seq, lens)
+    repeated = batch_repeat_interleave(seq, lens)
     assert torch.allclose(repeated, torch.tensor([[[1.], [1.], [1.], [2.], [2.], [2.], [2.], [4.], [4.]], [[1.], [1.], [2.], [2.], [2.], [2.], [2.], [4.], [0.]]]))
 
 def test_smooth_lddt_loss():
@@ -216,6 +228,7 @@ def test_msa_module(
     pairwise = torch.randn(2, 16, 16, 128).requires_grad_()
     msa = torch.randn(2, 7, 16, 64)
     mask = torch.randint(0, 2, (2, 16)).bool()
+    msa_mask = torch.randint(0, 2, (2, 7)).bool()
 
     msa_module = MSAModule(
         checkpoint = checkpoint,
@@ -226,7 +239,8 @@ def test_msa_module(
         msa = msa,
         single_repr = single,
         pairwise_repr = pairwise,
-        mask = mask
+        mask = mask,
+        msa_mask = msa_mask
     )
 
     assert pairwise.shape == pairwise_out.shape
@@ -285,7 +299,10 @@ def test_sequence_local_attn():
     out = attn(atoms, attn_bias = attn_bias)
     assert out.shape == atoms.shape
 
-def test_diffusion_module():
+@pytest.mark.parametrize('karras_formulation', (True, False))
+def test_diffusion_module(
+    karras_formulation
+):
 
     seq_len = 16
 
@@ -338,6 +355,7 @@ def test_diffusion_module():
 
     edm = ElucidatedAtomDiffusion(
         diffusion_module,
+        karras_formulation = karras_formulation,
         num_sample_steps = 2
     )
 
@@ -498,7 +516,7 @@ def test_distogram_head():
 @pytest.mark.parametrize('stochastic_frame_average', (True, False))
 @pytest.mark.parametrize('missing_atoms', (True, False))
 @pytest.mark.parametrize('atom_transformer_intramolecular_attn', (True, False))
-@pytest.mark.parametrize('num_molecule_mods', (0, 5))
+@pytest.mark.parametrize('num_molecule_mods', (0, 4))
 @pytest.mark.parametrize('confidence_head_atom_resolution', (True, False))
 def test_alphafold3(
     window_atompair_inputs: bool,
@@ -673,6 +691,7 @@ def test_alphafold3_without_msa_and_templates():
         dim_atom_inputs = 77,
         dim_template_feats = 44,
         num_dist_bins = 38,
+        num_molecule_mods = 0,
         checkpoint_trunk_pairformer = True,
         checkpoint_diffusion_token_transformer = True,
         confidence_head_kwargs = dict(
@@ -751,6 +770,7 @@ def test_alphafold3_force_return_loss():
         dim_atom_inputs = 77,
         dim_template_feats = 44,
         num_dist_bins = 38,
+        num_molecule_mods = 0,
         confidence_head_kwargs = dict(
             pairformer_depth = 1
         ),
@@ -835,6 +855,7 @@ def test_alphafold3_force_return_loss_with_confidence_logits():
         dim_atom_inputs = 77,
         dim_template_feats = 44,
         num_dist_bins = 38,
+        num_molecule_mods = 0,
         confidence_head_kwargs = dict(
             pairformer_depth = 1
         ),
@@ -897,6 +918,7 @@ def test_alphafold3_with_atom_and_bond_embeddings():
     alphafold3 = Alphafold3(
         num_atom_embeds = 7,
         num_atompair_embeds = 3,
+        num_molecule_mods = 0,
         dim_atom_inputs = 77,
         dim_template_feats = 44
     )
@@ -1083,3 +1105,42 @@ def test_model_selection_score():
         chains_list = [(0, 1), (1,)],
         is_fine_tuning=False
     )
+
+def test_unresolved_protein_rasa():
+
+    # rest of the test
+
+    mmcif_filepath = os.path.join('data', 'test', '7a4d-assembly1.cif')
+    pdb_input = PDBInput(mmcif_filepath)
+
+    mol_input = pdb_input_to_molecule_input(pdb_input)
+    atom_input = molecule_to_atom_input(mol_input)
+    batched_atom_input = collate_inputs_to_batched_atom_input([atom_input], atoms_per_window=27)
+    batched_atom_input_dict = batched_atom_input.dict()
+
+    res_idx, token_idx, asym_id, entity_id, sym_id = batched_atom_input_dict['additional_molecule_feats'].unbind(dim = -1)
+
+    cid = 1
+    res_chem_index = get_cid_molecule_type(
+        cid,
+        asym_id[0],
+        batched_atom_input_dict['is_molecule_types'][0])
+
+    # only support protein for unresolved protein calculate
+    assert res_chem_index == IS_PROTEIN
+
+    unresolved_residue_mask = torch.randint(0, 2, asym_id.shape).bool()
+
+    compute_model_selection_score = ComputeModelSelectionScore()
+
+    if not compute_model_selection_score.can_calculate_unresolved_protein_rasa:
+        pytest.skip("mkdssp not available for calculating unresolved protein rasa")
+
+    unresolved_rasa = compute_model_selection_score.compute_unresolved_rasa(
+        unresolved_cid=[1],
+        unresolved_residue_mask=unresolved_residue_mask,
+        asym_id = asym_id,
+        molecule_ids=batched_atom_input_dict['molecule_ids'],
+        molecule_atom_lens=batched_atom_input_dict['molecule_atom_lens'],
+        atom_pos=batched_atom_input_dict['atom_pos'],
+        atom_mask=~batched_atom_input_dict['missing_atom_mask'])

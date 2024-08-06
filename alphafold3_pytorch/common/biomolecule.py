@@ -245,7 +245,7 @@ class Biomolecule:
             crop_masks
         ), "The number of chains and crop masks must be equal."
         assert not all(
-            crop_mask.all() for crop_mask in crop_masks
+            not crop_mask.any() for crop_mask in crop_masks
         ), "Not all tokens can be cropped out of a Biomolecule."
 
         # collect metadata for each chain
@@ -278,7 +278,8 @@ class Biomolecule:
             list(zip(self.chain_index[chain_mask], self.residue_index[chain_mask]))
         )
         # NOTE: We must only consider unique chain-residue index pairs here,
-        # as otherwise we might count each ligand heavy atom as a residue in this mapping
+        # as otherwise we might count each ligand or modified polymer residue
+        # heavy atom as a residue in this mapping
         subset_chain_residue_mapping = set(map(tuple, chain_residue_index))
 
         # manually subset certain Biomolecule metadata
@@ -368,9 +369,20 @@ class Biomolecule:
                 for chemtype in self.chemtype
             ]
         )
-        # NOTE: ligand atom position indices vary per ligand residue, so we can't rely on representative atom indices here
-        token_res_rep_atom_indices[self.chemtype == 3] = np.where(
-            self.atom_mask[self.chemtype == 3]
+        # NOTE: ligand and modified residue atom position indices vary per "pseudoresidue",
+        # so we can't rely on representative atom indices here
+        is_ligand_residue = self.chemtype == 3
+        is_modified_polymer_residue = np.array(
+            [
+                chemtype < 3
+                and get_residue_constants(res_chem_index=chemtype).restype_3to1.get(chemid, "X")
+                == "X"
+                for (chemtype, chemid) in zip(self.chemtype, self.chemid)
+            ]
+        )
+        atomized_residue_mask = is_ligand_residue | is_modified_polymer_residue
+        token_res_rep_atom_indices[atomized_residue_mask] = np.where(
+            self.atom_mask[atomized_residue_mask]
         )[1]
         token_res_atom_position_mask[
             np.arange(self.chain_id.size), token_res_rep_atom_indices
@@ -387,6 +399,8 @@ class Biomolecule:
             token_center_atom_mask[self.chain_id == chain_1] = True
         elif exists(chain_2):
             token_center_atom_mask[self.chain_id == chain_2] = True
+        else:
+            raise ValueError("At least one chain ID must be specified for spatial cropping.")
 
         # potentially filter candidate token center atoms by interface proximity
 
@@ -439,7 +453,17 @@ class Biomolecule:
         chain_2: str | None = None,
     ) -> "Biomolecule":
         """Crop a Biomolecule using a randomly-sampled cropping function."""
-        crop_fn_weights = [contiguous_weight, spatial_weight, spatial_interface_weight]
+        n_res = min(n_res, len(self.atom_mask))
+        if exists(chain_1) and exists(chain_2):
+            crop_fn_weights = [contiguous_weight, spatial_weight, spatial_interface_weight]
+        elif exists(chain_1) or exists(chain_2):
+            crop_fn_weights = [contiguous_weight, spatial_weight + spatial_interface_weight, 0.0]
+        else:
+            crop_fn_weights = [
+                contiguous_weight + spatial_weight + spatial_interface_weight,
+                0.0,
+                0.0,
+            ]
         crop_fns = [
             partial(self.contiguous_crop, n_res=n_res),
             partial(
@@ -579,18 +603,22 @@ def get_ligand_atom_name(atom_name: str, atom_types_set: Set[str]) -> str:
 def get_unique_res_atom_names(
     mmcif_object: mmcif_parsing.MmcifObject,
 ) -> List[Tuple[List[List[str]], str, int]]:
-    """Get atom name-chain ID tuples for each (e.g. ligand) "pseudoresidue" of each residue in each chain."""
+    """Get atom name-chain ID tuples for each (e.g. ligand) "pseudoresidue" of each residue in each
+    chain."""
     unique_res_atom_names = []
     for chain in mmcif_object.structure:
         chain_chem_comp = mmcif_object.chem_comp_details[chain.id]
         for res, res_chem_comp in zip(chain, chain_chem_comp):
             is_polymer_residue = is_polymer(res_chem_comp.type)
             residue_constants = get_residue_constants(res_chem_type=res_chem_comp.type)
-            if is_polymer_residue:
-                # For polymer residues, append the atom types directly.
+            is_modified_polymer_residue = (
+                is_polymer_residue and residue_constants.restype_3to1.get(res.resname, "X") == "X"
+            )
+            if is_polymer_residue and not is_modified_polymer_residue:
+                # For unmodified polymer residues, append the atom types directly.
                 atoms_to_append = [residue_constants.atom_types]
             else:
-                # For non-polymer residues, create a nested list of atom names.
+                # For non-polymer or modified polymer residues, create a nested list of atom names.
                 atoms_to_append = [
                     [atom.name for _ in range(residue_constants.atom_type_num)] for atom in res
                 ]
@@ -602,7 +630,8 @@ def get_unique_res_atom_names(
 def _from_mmcif_object(
     mmcif_object: mmcif_parsing.MmcifObject,
     chain_ids: Optional[Set[str]] = None,
-    atomize_modified_polymer_residues: bool = False,
+    atomize_ligand_residues: bool = True,
+    atomize_modified_polymer_residues: bool = True,
 ) -> Biomolecule:
     """Takes a Biopython structure/model mmCIF object and creates a `Biomolecule` instance.
 
@@ -620,6 +649,10 @@ def _from_mmcif_object(
     :param mmcif_object: The parsed Biopython structure/model mmCIF object.
     :param chain_ids: If chain_ids are specified (e.g. A), then only these chains are parsed.
         Otherwise all chains are parsed.
+    :param atomize_ligand_residues: If True, then the atoms of ligand
+        residues are treated as "pseudoresidues". This is useful for
+        representing ligand residues as a collection of atoms rather
+        than as a single residue.
     :param atomize_modified_polymer_residues: If True, then the atoms of modified
         polymer residues are treated as "pseudoresidues". This is useful for
         representing modified polymer residues as a collection of (e.g., ligand)
@@ -679,9 +712,13 @@ def _from_mmcif_object(
                 res_shortname, residue_constants.restype_num
             )
             is_modified_polymer_residue = is_polymer_residue and res_shortname == "X"
-            if is_polymer_residue and not (
+            residize_polymer = is_polymer_residue and not (
                 is_modified_polymer_residue and atomize_modified_polymer_residues
-            ):
+            )
+            residize_non_polymer = (
+                not is_polymer_residue and not atomize_ligand_residues
+            )
+            if residize_polymer or residize_non_polymer:
                 pos = np.zeros((residue_constants.atom_type_num, 3))
                 mask = np.zeros((residue_constants.atom_type_num,))
                 res_b_factors = np.zeros((residue_constants.atom_type_num,))
@@ -755,9 +792,9 @@ def _from_mmcif_object(
                 else:
                     residue_chem_comp_details.add(res_chem_comp_details)
             else:
-                # Represent each ligand atom as a single "pseudoresidue".
-                # NOTE: Ligand "pseudoresidues" can later be grouped back
-                # into a single ligand residue using indexing operations
+                # Represent each residue atom as a single "pseudoresidue".
+                # NOTE: These "pseudoresidues" can later be grouped back
+                # into a single residue using indexing operations
                 # working jointly on chain_index and residue_index.
                 for atom in res:
                     # NOTE: This code assumes water residues have previously been filtered out.
@@ -846,7 +883,11 @@ def _from_mmcif_object(
 
 @typecheck
 def from_mmcif_string(
-    mmcif_str: str, file_id: str, chain_ids: Optional[Set[str]] = None
+    mmcif_str: str,
+    file_id: str,
+    chain_ids: Optional[Set[str]] = None,
+    atomize_ligand_residues: bool = True,
+    atomize_modified_polymer_residues: bool = True,
 ) -> Biomolecule:
     """Takes a mmCIF string and constructs a `Biomolecule` object.
 
@@ -870,7 +911,12 @@ def from_mmcif_string(
     if parsing_result.mmcif_object is None:
         raise list(parsing_result.errors.values())[0]
 
-    return _from_mmcif_object(parsing_result.mmcif_object, chain_ids=chain_ids)
+    return _from_mmcif_object(
+        parsing_result.mmcif_object,
+        chain_ids=chain_ids,
+        atomize_ligand_residues=atomize_ligand_residues,
+        atomize_modified_polymer_residues=atomize_modified_polymer_residues,
+    )
 
 
 @typecheck

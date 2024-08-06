@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import wraps, partial
-from dataclasses import asdict
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -27,7 +26,7 @@ from alphafold3_pytorch.inputs import (
     Alphafold3Input,
     PDBInput,
     maybe_transform_to_atom_inputs,
-    alphafold3_input_to_molecule_input
+    UNCOLLATABLE_ATOM_INPUT_FIELDS,
 )
 
 from alphafold3_pytorch.data import (
@@ -36,6 +35,7 @@ from alphafold3_pytorch.data import (
 
 import torch
 from torch import Tensor
+from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Sampler, Dataset, DataLoader as OrigDataLoader
@@ -47,6 +47,7 @@ from adam_atan2_pytorch.foreach import AdamAtan2
 from ema_pytorch import EMA
 
 from lightning import Fabric
+from lightning.fabric.loggers import Logger
 from lightning.fabric.wrappers import _unwrap_objects
 
 from shortuuid import uuid
@@ -141,18 +142,24 @@ def collate_inputs_to_batched_atom_input(
 
     # separate input dictionary into keys and values
 
-    keys = atom_inputs[0].dict().keys()
+    keys = list(atom_inputs[0].dict().keys())
     atom_inputs = [i.dict().values() for i in atom_inputs]
 
     outputs = []
 
-    for grouped in zip(*atom_inputs):
+    for key, grouped in zip(keys, zip(*atom_inputs)):
         # if all None, just return None
 
         not_none_grouped = [*filter(exists, grouped)]
 
         if len(not_none_grouped) == 0:
             outputs.append(None)
+            continue
+
+        # collate lists for uncollatable fields
+
+        if key in UNCOLLATABLE_ATOM_INPUT_FIELDS:
+            outputs.append(grouped)
             continue
 
         # default to empty tensor for any Nones
@@ -290,6 +297,7 @@ class Trainer:
         default_lambda_lr = default_lambda_lr_fn,
         train_sampler: Sampler | None = None,
         fabric: Fabric | None = None,
+        loggers: List[Logger] = [],
         accelerator = 'auto',
         checkpoint_prefix = 'af3.ckpt.',
         checkpoint_every: int = 1000,
@@ -317,7 +325,11 @@ class Trainer:
         # instantiate fabric
 
         if not exists(fabric):
-            fabric = Fabric(accelerator = accelerator, **fabric_kwargs)
+            fabric = Fabric(
+                accelerator = accelerator,
+                loggers = loggers,
+                **fabric_kwargs
+            )
 
         self.fabric = fabric
         fabric.launch()
@@ -628,7 +640,7 @@ class Trainer:
                     # model forwards
 
                     loss, loss_breakdown = self.model(
-                        **inputs.dict(),
+                        **inputs.model_forward_dict(),
                         return_loss_breakdown = True
                     )
 
@@ -690,7 +702,7 @@ class Trainer:
 
                     for valid_batch in self.valid_dataloader:
                         valid_loss, loss_breakdown = eval_model(
-                            **valid_batch.dict(),
+                            **valid_batch.model_forward_dict(),
                             return_loss_breakdown = True
                         )
 
@@ -730,7 +742,7 @@ class Trainer:
 
                 for test_batch in self.test_dataloader:
                     test_loss, loss_breakdown = eval_model(
-                        **test_batch.dict(),
+                        **test_batch.model_forward_dict(),
                         return_loss_breakdown = True
                     )
 

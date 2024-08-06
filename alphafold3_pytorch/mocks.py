@@ -1,5 +1,4 @@
 from random import randrange, random
-from dataclasses import asdict
 
 import torch
 from torch.utils.data import Dataset
@@ -18,11 +17,13 @@ class MockAtomDataset(Dataset):
         data_length,
         max_seq_len = 16,
         atoms_per_window = 4,
-        has_molecule_mods = False
+        dim_atom_inputs = 77,
+        has_molecule_mods = True
     ):
         self.data_length = data_length
         self.max_seq_len = max_seq_len
         self.atoms_per_window = atoms_per_window
+        self.dim_atom_inputs = dim_atom_inputs
         self.has_molecule_mods = has_molecule_mods
 
     def __len__(self):
@@ -32,7 +33,7 @@ class MockAtomDataset(Dataset):
         seq_len = randrange(1, self.max_seq_len)
         atom_seq_len = self.atoms_per_window * seq_len
 
-        atom_inputs = torch.randn(atom_seq_len, 77)
+        atom_inputs = torch.randn(atom_seq_len, self.dim_atom_inputs)
         atompair_inputs = torch.randn(atom_seq_len, atom_seq_len, 5)
 
         molecule_atom_lens = torch.randint(1, self.atoms_per_window, (seq_len,))
