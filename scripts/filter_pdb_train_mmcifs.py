@@ -807,9 +807,7 @@ def filter_structure(args: Tuple[str, str, datetime, datetime, bool]):
         print('had a problem getting the lock, skipping')
         return    
 
-    with open(output_filepath_started_processing, 'w') as f:
-        f.write("")
-        f.close()        
+    _create_empty_file(output_filepath_started_processing)    
 
     print(f'will start processing {file_id} now ...')
 
