@@ -32,6 +32,7 @@ from datetime import datetime
 
 import timeout_decorator
 from tqdm.contrib.concurrent import process_map
+from tqdm import tqdm
 
 from alphafold3_pytorch.common.biomolecule import _from_mmcif_object
 from alphafold3_pytorch.common.paper_constants import (
@@ -331,9 +332,21 @@ if __name__ == "__main__":
             )
         )
     ]
-    process_map(
-        filter_structure,
-        args_tuples,
-        max_workers=args.no_workers,
-        chunksize=args.chunksize,
-    )
+    # process_map(
+    #     filter_structure,
+    #     args_tuples,
+    #     max_workers=args.no_workers,
+    #     chunksize=args.chunksize,
+    # )
+
+    if False:
+        process_map(
+            filter_structure,
+            args_tuples,
+            max_workers=args.no_workers,
+            chunksize=args.chunksize,
+        )
+    else:
+        for curr_args in tqdm(args_tuples, total=len(args_tuples)):
+            print('curr_args=', curr_args)
+            filter_structure(curr_args)

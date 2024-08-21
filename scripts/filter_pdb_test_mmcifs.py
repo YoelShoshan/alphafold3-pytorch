@@ -28,7 +28,8 @@ from typing import List, Tuple
 
 import timeout_decorator
 from tqdm.contrib.concurrent import process_map
-
+from tqdm import tqdm
+from filelock import Timeout, FileLock
 from alphafold3_pytorch.common.paper_constants import (
     CRYSTALLOGRAPHY_METHODS,
     LIGAND_EXCLUSION_SET,
@@ -146,6 +147,9 @@ def filter_structure_with_timeout(
         )
         print(f"Finished filtering structure: {mmcif_object.file_id}")
 
+def _create_empty_file(filepath:str):
+    with open(filepath,'w') as f: 
+        f.write("")
 
 @typecheck
 def filter_structure(args: Tuple[str, str, datetime, datetime, bool]):
@@ -158,6 +162,32 @@ def filter_structure(args: Tuple[str, str, datetime, datetime, bool]):
     output_file_dir = os.path.join(output_dir, file_id[1:3])
     output_filepath = os.path.join(output_file_dir, f"{file_id}.cif")
 
+    
+    output_filepath_filtered_out = output_filepath +'.FILTERED_OUT'
+    output_filepath_started_processing = output_filepath +'.STARTED_PROCESSING'
+
+    if os.path.exists(output_filepath_filtered_out):
+        print(f'skipped {file_id} because it did not pass filtering in the past')
+        return
+            
+    if os.path.exists(output_filepath_started_processing):
+        print(f'skipped {file_id} because another process already started processing for it')
+        return
+
+    lock = FileLock(output_filepath_started_processing+'.lock', timeout=0)
+
+    try:
+        with lock.acquire(timeout=0):
+            pass
+    except:
+        #we had a problem getting the lock, skip
+        print('had a problem getting the lock, skipping')
+        return    
+
+    _create_empty_file(output_filepath_started_processing)    
+
+    print(f'will start processing {file_id} now ...')
+
     try:
         filter_structure_with_timeout(
             filepath,
@@ -168,6 +198,7 @@ def filter_structure(args: Tuple[str, str, datetime, datetime, bool]):
         )
     except Exception as e:
         print(f"Skipping structure filtering of {filepath} due to: {e}")
+        _create_empty_file(output_filepath_filtered_out) #mark as filtered out, to avoid reprocessing
         if os.path.exists(output_filepath):
             try:
                 os.remove(output_filepath)
@@ -282,9 +313,28 @@ if __name__ == "__main__":
             )
         )
     ]
-    process_map(
-        filter_structure,
-        args_tuples,
-        max_workers=args.no_workers,
-        chunksize=args.chunksize,
-    )
+    # process_map(
+    #     filter_structure,
+    #     args_tuples,
+    #     max_workers=args.no_workers,
+    #     chunksize=args.chunksize,
+    # )
+
+      # process_map(
+    #     filter_structure,
+    #     args_tuples,
+    #     max_workers=args.no_workers,
+    #     chunksize=args.chunksize,
+    # )
+
+    if False:
+        process_map(
+            filter_structure,
+            args_tuples,
+            max_workers=args.no_workers,
+            chunksize=args.chunksize,
+        )
+    else:
+        for curr_args in tqdm(args_tuples, total=len(args_tuples)):
+            print('curr_args=', curr_args)
+            filter_structure(curr_args)
