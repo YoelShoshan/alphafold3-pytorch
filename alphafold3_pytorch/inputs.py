@@ -63,7 +63,7 @@ from alphafold3_pytorch.utils.data_utils import (
     is_polymer,
 )
 from alphafold3_pytorch.utils.model_utils import exclusive_cumsum
-from alphafold3_pytorch.utils.utils import default, exists, first, identity
+from alphafold3_pytorch.utils.utils import default, exists, first
 
 # silence RDKit's warnings
 
@@ -79,9 +79,15 @@ IS_LIGAND_INDEX = -2
 IS_METAL_ION_INDEX = -1
 IS_BIOMOLECULE_INDICES = slice(0, 3)
 
-IS_PROTEIN, IS_DNA, IS_RNA, IS_LIGAND, IS_METAL_ION = tuple(
-    (IS_MOLECULE_TYPES - i if i < 0 else i)
-    for i in [IS_PROTEIN_INDEX, IS_DNA_INDEX, IS_RNA_INDEX, IS_LIGAND_INDEX, IS_METAL_ION_INDEX]
+IS_PROTEIN, IS_RNA, IS_DNA, IS_LIGAND, IS_METAL_ION = tuple(
+    (IS_MOLECULE_TYPES + i if i < 0 else i)
+    for i in [
+        IS_PROTEIN_INDEX,
+        IS_RNA_INDEX,
+        IS_DNA_INDEX,
+        IS_LIGAND_INDEX,
+        IS_METAL_ION_INDEX,
+    ]
 )
 
 MOLECULE_GAP_ID = len(HUMAN_AMINO_ACIDS) + len(RNA_NUCLEOTIDES) + len(DNA_NUCLEOTIDES)
@@ -133,6 +139,11 @@ def pad_to_len(t, length, value = 0, dim = -1):
     zeros = (0, 0) * (-dim - 1)
     return F.pad(t, (*zeros, 0, max(0, length - t.shape[dim])), value = value)
 
+def offset_only_positive(t, offset):
+    is_positive = t >= 0
+    t_offsetted = t + offset
+    return torch.where(is_positive, t_offsetted, t)
+
 def compose(*fns: Callable):
     # for chaining from Alphafold3Input -> MoleculeInput -> AtomInput
 
@@ -153,7 +164,16 @@ def maybe(fn):
 # atom level, what Alphafold3 accepts
 
 UNCOLLATABLE_ATOM_INPUT_FIELDS = {'filepath'}
-ATOM_INPUT_EXCLUDE_MODEL_FIELDS = {'filepath', 'chains'}
+
+ATOM_INPUT_EXCLUDE_MODEL_FIELDS = {
+    'filepath',
+    'chains'
+}
+
+ATOM_DEFAULT_PAD_VALUES = dict(
+    molecule_atom_lens = 0,
+    missing_atom_mask = True
+)
 
 @typecheck
 @dataclass
@@ -178,8 +198,8 @@ class AtomInput:
     missing_atom_mask:          Bool[' m'] | None = None
     molecule_atom_indices:      Int[' n'] | None = None
     distogram_atom_indices:     Int[' n'] | None = None
+    atom_indices_for_frame:     Int['n 3'] | None = None
     distance_labels:            Int['n n'] | None = None
-    pae_labels:                 Int['n n'] | None = None
     pde_labels:                 Int['n n'] | None = None
     plddt_labels:               Int[' n'] | None = None
     resolved_labels:            Int[' n'] | None = None
@@ -212,8 +232,8 @@ class BatchedAtomInput:
     missing_atom_mask:          Bool['b m'] | None = None
     molecule_atom_indices:      Int['b n'] | None = None
     distogram_atom_indices:     Int['b n'] | None = None
+    atom_indices_for_frame:     Int['b n 3'] | None = None
     distance_labels:            Int['b n n'] | None = None
-    pae_labels:                 Int['b n n'] | None = None
     pde_labels:                 Int['b n n'] | None = None
     plddt_labels:               Int['b n'] | None = None
     resolved_labels:            Int['b n'] | None = None
@@ -429,6 +449,7 @@ class MoleculeInput:
     is_molecule_mod:            Bool['n num_mods'] | Bool[' n'] | None = None
     molecule_atom_indices:      List[int | None] | None = None
     distogram_atom_indices:     List[int | None] | None = None
+    atom_indices_for_frame:     List[Tuple[int, int, int] | None] | None = None
     missing_atom_indices:       List[Int[' _'] | None] | None = None
     missing_token_indices:      List[Int[' _'] | None] | None = None
     atom_parent_ids:            Int[' m'] | None = None
@@ -439,7 +460,6 @@ class MoleculeInput:
     template_mask:              Bool[' t'] | None = None
     msa_mask:                   Bool[' s'] | None = None
     distance_labels:            Int['n n'] | None = None
-    pae_labels:                 Int['n n'] | None = None
     pde_labels:                 Int[' n'] | None = None
     resolved_labels:            Int[' n'] | None = None
     chains:                     Tuple[int | None, int | None] | None = (None, None)
@@ -700,6 +720,14 @@ def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
     if is_molecule_mod.ndim == 1:
         is_molecule_mod = rearrange(is_molecule_mod, 'n -> n 1')
 
+    # handle `atom_indices_for_frame` for the PAE
+
+    atom_indices_for_frame = i.atom_indices_for_frame
+
+    if exists(atom_indices_for_frame):
+        atom_indices_for_frame = [default(indices, (-1, -1, -1)) for indices in i.atom_indices_for_frame]
+        atom_indices_for_frame = tensor(atom_indices_for_frame)
+
     # atom input
 
     atom_input = AtomInput(
@@ -709,6 +737,7 @@ def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
         molecule_ids=i.molecule_ids,
         molecule_atom_indices=i.molecule_atom_indices,
         distogram_atom_indices=i.distogram_atom_indices,
+        atom_indices_for_frame=atom_indices_for_frame,
         is_molecule_mod=is_molecule_mod,
         msa=i.msa,
         templates=i.templates,
@@ -748,6 +777,7 @@ class MoleculeLengthMoleculeInput:
     is_molecule_mod:            Bool['n num_mods'] | Bool[' n'] | None = None
     molecule_atom_indices:      List[int | None] | None = None
     distogram_atom_indices:     List[int | None] | None = None
+    atom_indices_for_frame:     List[Tuple[int, int, int] | None] | None = None
     missing_atom_indices:       List[Int[' _'] | None] | None = None
     missing_token_indices:      List[Int[' _'] | None] | None = None
     atom_parent_ids:            Int[' m'] | None = None
@@ -758,7 +788,6 @@ class MoleculeLengthMoleculeInput:
     template_mask:              Bool[' t'] | None = None
     msa_mask:                   Bool[' s'] | None = None
     distance_labels:            Int['n n'] | None = None
-    pae_labels:                 Int['n n'] | None = None
     pde_labels:                 Int[' n'] | None = None
     resolved_labels:            Int[' n'] | None = None
     chains:                     Tuple[int | None, int | None] | None = (None, None)
@@ -846,6 +875,8 @@ def molecule_lengthed_molecule_input_to_atom_input(mol_input: MoleculeLengthMole
 
     additional_token_feats = repeat_interleave(i.additional_token_feats, token_repeats, dim = 0)
     molecule_ids = repeat_interleave(i.molecule_ids, token_repeats)
+
+    atom_indices_offsets = repeat_interleave(exclusive_cumsum(atoms_per_molecule), token_repeats, dim = 0)
 
     distogram_atom_indices = repeat_interleave(i.distogram_atom_indices, token_repeats)
     molecule_atom_indices = repeat_interleave(i.molecule_atom_indices, token_repeats)
@@ -982,6 +1013,16 @@ def molecule_lengthed_molecule_input_to_atom_input(mol_input: MoleculeLengthMole
             padding_value=-2,
         )
 
+    # handle `atom_indices_for_frame` for the PAE
+
+    atom_indices_for_frame = i.atom_indices_for_frame
+
+    if exists(atom_indices_for_frame):
+        atom_indices_for_frame = [default(indices, (-1, -1, -1)) for indices in i.atom_indices_for_frame]
+        atom_indices_for_frame = tensor(atom_indices_for_frame)
+
+    atom_indices_for_frame = repeat_interleave(atom_indices_for_frame, token_repeats, dim = 0)
+
     # handle maybe atompair embeds
 
     atompair_ids = None
@@ -1113,8 +1154,19 @@ def molecule_lengthed_molecule_input_to_atom_input(mol_input: MoleculeLengthMole
             "n missing, n -> n missing", missing_token_indices, distogram_atom_indices
         ).any(dim=-1)
 
+        is_missing_atom_indices_for_frame = einx.equal(
+            "n missing, n c -> n c missing", missing_token_indices, atom_indices_for_frame
+        ).any(dim=(-1, -2))
+
         molecule_atom_indices = molecule_atom_indices.masked_fill(is_missing_molecule_atom, -1)
         distogram_atom_indices = distogram_atom_indices.masked_fill(is_missing_distogram_atom, -1)
+        atom_indices_for_frame = atom_indices_for_frame.masked_fill(is_missing_atom_indices_for_frame[..., None], -1)
+
+    # offsets for all indices
+
+    distogram_atom_indices = offset_only_positive(distogram_atom_indices, atom_indices_offsets)
+    molecule_atom_indices = offset_only_positive(molecule_atom_indices, atom_indices_offsets)
+    atom_indices_for_frame = offset_only_positive(atom_indices_for_frame, atom_indices_offsets[..., None])
 
     # handle atom positions
 
@@ -1136,6 +1188,7 @@ def molecule_lengthed_molecule_input_to_atom_input(mol_input: MoleculeLengthMole
         molecule_ids = molecule_ids,
         molecule_atom_indices = molecule_atom_indices,
         distogram_atom_indices = distogram_atom_indices,
+        atom_indices_for_frame = atom_indices_for_frame,
         missing_atom_mask = missing_atom_mask,
         additional_token_feats = additional_token_feats,
         additional_molecule_feats = additional_molecule_feats,
@@ -1179,7 +1232,6 @@ class Alphafold3Input:
     template_mask:              Bool[' t'] | None = None
     msa_mask:                   Bool[' s'] | None = None
     distance_labels:            Int['n n'] | None = None
-    pae_labels:                 Int['n n'] | None = None
     pde_labels:                 Int[' n'] | None = None
     resolved_labels:            Int[' n'] | None = None
     chains:                     Tuple[int | None, int | None] | None = (None, None)
@@ -1280,6 +1332,7 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(alphafold3_input: Alpha
     mol_proteins = []
     protein_entries = []
 
+    atom_indices_for_frame = []
     distogram_atom_indices = []
     molecule_atom_indices = []
     src_tgt_atom_indices = []
@@ -1297,6 +1350,10 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(alphafold3_input: Alpha
 
         src_tgt_atom_indices.extend(
             [[entry["first_atom_idx"], entry["last_atom_idx"]] for entry in protein_entries]
+        )
+
+        atom_indices_for_frame.extend(
+            [entry["three_atom_indices_for_frame"] for entry in protein_entries]
         )
 
         protein_ids = maybe_string_to_int(HUMAN_AMINO_ACIDS, protein)
@@ -1322,6 +1379,10 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(alphafold3_input: Alpha
             [[entry["first_atom_idx"], entry["last_atom_idx"]] for entry in ss_rna_entries]
         )
 
+        atom_indices_for_frame.extend(
+            [entry["three_atom_indices_for_frame"] for entry in ss_rna_entries]
+        )
+
         rna_ids = maybe_string_to_int(RNA_NUCLEOTIDES, seq) + rna_offset
         molecule_ids.append(rna_ids)
 
@@ -1340,17 +1401,14 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(alphafold3_input: Alpha
             [[entry["first_atom_idx"], entry["last_atom_idx"]] for entry in ss_dna_entries]
         )
 
+        atom_indices_for_frame.extend(
+            [entry["three_atom_indices_for_frame"] for entry in ss_dna_entries]
+        )
+
         dna_ids = maybe_string_to_int(DNA_NUCLEOTIDES, seq) + dna_offset
         molecule_ids.append(dna_ids)
 
         chainable_biomol_entries.append(ss_dna_entries)
-
-    # convert metal ions to rdchem.Mol
-
-    metal_ions = alphafold3_input.metal_ions
-    mol_metal_ions = map_int_or_string_indices_to_mol(METALS, metal_ions)
-
-    molecule_ids.append(tensor([MOLECULE_METAL_ION_ID] * len(mol_metal_ions)))
 
     # convert ligands to rdchem.Mol
 
@@ -1360,6 +1418,13 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(alphafold3_input: Alpha
     ]
 
     molecule_ids.append(tensor([ligand_id] * len(mol_ligands)))
+    
+    # convert metal ions to rdchem.Mol
+
+    metal_ions = alphafold3_input.metal_ions
+    mol_metal_ions = map_int_or_string_indices_to_mol(METALS, metal_ions)
+
+    molecule_ids.append(tensor([MOLECULE_METAL_ION_ID] * len(mol_metal_ions)))
 
     # create the molecule input
 
@@ -1413,6 +1478,12 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(alphafold3_input: Alpha
 
     for mol in molecules:
         Chem.SanitizeMol(mol)
+
+    # handle rest of non-biomolecules for atom_indices_for_frame
+
+    atom_indices_for_frame = [*atom_indices_for_frame, *([None] * (len(molecules) - len(atom_indices_for_frame)))]
+
+    assert len(atom_indices_for_frame) == len(molecules)
 
     # handle molecule ids
 
@@ -1572,6 +1643,7 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(alphafold3_input: Alpha
         missing_atom_indices=missing_atom_indices,
         missing_token_indices=missing_token_indices,
         src_tgt_atom_indices=src_tgt_atom_indices,
+        atom_indices_for_frame=atom_indices_for_frame,
         atom_pos=atom_pos,
         templates=i.templates,
         msa=i.msa,
@@ -1793,7 +1865,7 @@ def create_mol_from_atom_positions_and_types(
     atom_positions: np.ndarray,
     element_types: List[str],
     missing_atom_indices: Set[int],
-    num_bond_attempts: int = 2,
+    neutral_stable_mol_hypothesis: bool = True,
     verbose: bool = False,
 ) -> Mol:
     """Create an RDKit molecule from a NumPy array of atom positions and a list of their element
@@ -1805,7 +1877,8 @@ def create_mol_from_atom_positions_and_types(
     :param element_types: A list of element symbols for each atom in the molecule.
     :param missing_atom_indices: A set of atom indices that are missing from the atom_positions
         array.
-    :param num_bond_attempts: The number of attempts to determine the bonds in the molecule.
+    :param neutral_stable_mol_hypothesis: Whether to convert radical electrons into explicit
+        hydrogens based on the `PDB neutral stable molecule` hypothesis.
     :param verbose: Whether to log warnings when bond determination fails.
     :return: An RDKit molecule with the specified atom positions and element types.
     """
@@ -1830,7 +1903,6 @@ def create_mol_from_atom_positions_and_types(
     # add the conformer to the molecule
 
     mol.AddConformer(conf)
-    Chem.SanitizeMol(mol)
 
     # block the RDKit logger
 
@@ -1838,33 +1910,36 @@ def create_mol_from_atom_positions_and_types(
 
     # finalize molecule by inferring bonds
 
-    determined_bonds = False
-    for i in range(num_bond_attempts):
-        try:
-            charge = Chem.GetFormalCharge(mol)
-            rdDetermineBonds.DetermineBonds(mol, charge=charge)
-            determined_bonds = True
-        except Exception as e:
-            if verbose:
-                logger.warning(
-                    f"Failed to determine bonds for the input molecule {name} due to: {e}. "
-                    f"{'Retrying once more.' if i < num_bond_attempts - 1 else 'Terminating bond assignment.'}"
-                )
-            continue
-    if not determined_bonds:
+    try:
+        with StringIO() as buf:
+            with redirect_stderr(buf):
+                # redirect RDKit's stderr to a buffer to suppress warnings
+                rdDetermineBonds.DetermineBonds(mol, allowChargedFragments=False)
+    except Exception as e:
         if verbose:
             logger.warning(
-                "Failed to determine bonds in the input molecule. Skipping bond assignment."
+                f"Failed to determine bonds for the input molecule {name} due to: {e}. Skipping bond determination."
             )
-
-    # unblock the RDKit logger
-
-    del blocker
 
     # clean up the molecule
 
     mol = Chem.RemoveHs(mol, sanitize=False)
     Chem.SanitizeMol(mol, catchErrors=True)
+
+    # based on the `PDB neutral stable molecule` hypothesis
+    # (see https://github.com/rdkit/rdkit/issues/2683#issuecomment-2273998084),
+    # convert radical electrons into explicit hydrogens
+
+    if neutral_stable_mol_hypothesis:
+        for a in mol.GetAtoms():
+            if a.GetNumRadicalElectrons():
+                a.SetNumExplicitHs(a.GetNumRadicalElectrons())
+                a.SetNumRadicalElectrons(0)
+            Chem.SanitizeMol(mol, catchErrors=True)
+
+    # unblock the RDKit logger
+
+    del blocker
 
     # set a property to indicate the atom positions that are missing
 
@@ -2566,6 +2641,13 @@ def pdb_input_to_molecule_input(
     assert len(molecules) == len(missing_atom_indices)
     assert len(missing_token_indices) == num_tokens
 
+    mol_total_atoms = sum([mol.GetNumAtoms() for mol in molecules])
+    num_missing_atom_indices = sum(
+        len(mol_miss_atom_indices) for mol_miss_atom_indices in missing_atom_indices
+    )
+    num_present_atoms = mol_total_atoms - num_missing_atom_indices
+    assert num_present_atoms == int(biomol.atom_mask.sum())
+
     # TODO: install additional token features once MSAs are available
     # 0: f_profile
     # 1: f_deletion_mean
@@ -2645,6 +2727,7 @@ class PDBDataset(Dataset):
         spatial_interface_weight: float = 0.4,
         crop_size: int = 384,
         training: bool | None = None,  # extra training flag placed by Alex on PDBInput
+        sample_only_pdb_ids: Set[str] | None = None,
         **pdb_input_kwargs,
     ):
         if isinstance(folder, str):
@@ -2653,13 +2736,10 @@ class PDBDataset(Dataset):
         assert folder.exists() and folder.is_dir(), f"{str(folder)} does not exist for PDBDataset"
         self.folder = folder
 
-        self.files = {
-            os.path.splitext(os.path.basename(file.name))[0]: file
-            for file in folder.glob(os.path.join("**", "*.cif"))
-        }
         self.sampler = sampler
         self.sample_type = sample_type
         self.training = training
+        self.sample_only_pdb_ids = sample_only_pdb_ids
         self.pdb_input_kwargs = pdb_input_kwargs
 
         self.cropping_config = {
@@ -2674,10 +2754,21 @@ class PDBDataset(Dataset):
         if exists(self.sampler):
             sampler_pdb_ids = set(self.sampler.mappings.get_column("pdb_id").to_list())
             self.files = {
-                file: filepath
-                for (file, filepath) in self.files.items()
-                if file in sampler_pdb_ids
+                os.path.splitext(os.path.basename(filepath.name))[0]: filepath
+                for filepath in folder.glob(os.path.join("**", "*.cif"))
+                if os.path.splitext(os.path.basename(filepath.name))[0] in sampler_pdb_ids
             }
+        else:
+            self.files = {
+                os.path.splitext(os.path.basename(file.name))[0]: file
+                for file in folder.glob(os.path.join("**", "*.cif"))
+            }
+
+        if exists(sample_only_pdb_ids):
+            assert exists(self.sampler), "A sampler must be provided to use `sample_only_pdb_ids`."
+            assert all(
+                pdb_id in sampler_pdb_ids for pdb_id in sample_only_pdb_ids
+            ), "Some PDB IDs in `sample_only_pdb_ids` are not present in the dataset's sampler mappings."
 
         assert len(self) > 0, f"No valid mmCIFs / PDBs found at {str(folder)}"
 
@@ -2690,10 +2781,18 @@ class PDBDataset(Dataset):
         sampled_id = None
 
         if exists(self.sampler):
-            if self.sample_type == "clustered":
-                (sampled_id,) = self.sampler.cluster_based_sample(1)
-            else:
-                (sampled_id,) = self.sampler.sample(1)
+            sample_fn = (
+                self.sampler.cluster_based_sample
+                if self.sample_type == "clustered"
+                else self.sampler.sample
+            )
+            (sampled_id,) = sample_fn(1)
+
+            # ensure that the sampled PDB ID is in the specified set of PDB IDs from which to sample
+
+            if exists(self.sample_only_pdb_ids):
+                while sampled_id[0] not in self.sample_only_pdb_ids:
+                    (sampled_id,) = sample_fn(1)
 
         pdb_id, chain_id_1, chain_id_2 = None, None, None
 

@@ -4,7 +4,7 @@
 
 Implementation of <a href="https://www.nature.com/articles/s41586-024-07487-w">Alphafold 3</a> in Pytorch
 
-You can chat with other researchers about this work <a href="https://discord.gg/x6FuzQPQXY">here</a>
+You can chat with other researchers about this work [here](https://discord.gg/Xsq4WaBR9S)
 
 <a href="https://www.youtube.com/watch?v=qjFgthkKxcA">Review of the paper</a> by <a href="https://x.com/sokrypton">Sergey</a>
 
@@ -47,6 +47,10 @@ A visualization of the molecules of life used in the repository can be seen and 
 - <a href="https://github.com/xluo233">@xluo233</a> again for contributing the logic for computing the model selection score as well as the unresolved rasa!
 
 - <a href="https://github.com/wufandi">Fandi</a> for discovering a few inconsistencies in the elucidated atom diffusion module with the supplementary
+  
+- <a href="https://github.com/ptosco">Paolo</a> for proposing the `PDB neutral stable molecule` hypothesis!
+
+- <a href="https://github.com/dhuvik">Dhuvi</a> for fixing a bug related to metal ion molecule ID assignment for `Alphafold3Inputs`!
 
 - <a href="https://github.com/patrick-kidger">Patrick</a> for <a href="https://docs.kidger.site/jaxtyping/">jaxtyping</a>, <a href="https://github.com/fferflo">Florian</a> for <a href="https://github.com/fferflo/einx">einx</a>, and of course, <a href="https://github.com/arogozhnikov">Alex</a> for <a href="https://einops.rocks/">einops</a>
 

@@ -10,6 +10,9 @@ from rdkit.Chem.rdchem import Mol
 from alphafold3_pytorch.tensor_typing import Int, typecheck
 
 
+def exists(v):
+    return v is not None
+
 def is_unique(arr):
     """Check if all elements in an array are unique."""
     return len(arr) == len({*arr})
@@ -28,6 +31,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=4,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     R=dict(
         resname="ARG",
@@ -36,6 +40,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=10,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     N=dict(
         resname="ASN",
@@ -44,6 +49,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=7,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     D=dict(
         resname="ASP",
@@ -52,6 +58,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=7,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     C=dict(
         resname="CYS",
@@ -60,6 +67,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=5,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     Q=dict(
         resname="GLN",
@@ -68,6 +76,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=8,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     E=dict(
         resname="GLU",
@@ -76,6 +85,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=8,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     G=dict(
         resname="GLY",
@@ -84,6 +94,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=3,
         distogram_atom_idx=1,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     H=dict(
         resname="HIS",
@@ -92,6 +103,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=9,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     I=dict(
         resname="ILE",
@@ -100,6 +112,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=7,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     L=dict(
         resname="LEU",
@@ -108,6 +121,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=7,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     K=dict(
         resname="LYS",
@@ -116,6 +130,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=8,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     M=dict(
         resname="MET",
@@ -124,6 +139,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=7,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     F=dict(
         resname="PHE",
@@ -132,6 +148,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=10,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     P=dict(
         resname="PRO",
@@ -140,6 +157,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=6,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     S=dict(
         resname="SER",
@@ -148,6 +166,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=5,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     T=dict(
         resname="THR",
@@ -156,6 +175,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=6,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     W=dict(
         resname="TRP",
@@ -164,6 +184,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=13,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     Y=dict(
         resname="TYR",
@@ -172,6 +193,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=11,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     V=dict(
         resname="VAL",
@@ -180,6 +202,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=6,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=(0, 1, 2),
     ),
     X=dict(
         resname="UNK",
@@ -188,6 +211,7 @@ HUMAN_AMINO_ACIDS = dict(
         last_atom_idx=4,
         distogram_atom_idx=4,
         token_center_atom_idx=1,
+        three_atom_indices_for_frame=None,
     ),
 )
 
@@ -202,6 +226,7 @@ DNA_NUCLEOTIDES = dict(
         complement="T",
         distogram_atom_idx=21,
         token_center_atom_idx=11,
+        three_atom_indices_for_frame=(11, 8, 6),
     ),
     C=dict(
         resname="DC",
@@ -211,6 +236,7 @@ DNA_NUCLEOTIDES = dict(
         complement="G",
         distogram_atom_idx=13,
         token_center_atom_idx=11,
+        three_atom_indices_for_frame=(11, 8, 6),
     ),
     G=dict(
         resname="DG",
@@ -220,6 +246,7 @@ DNA_NUCLEOTIDES = dict(
         complement="C",
         distogram_atom_idx=22,
         token_center_atom_idx=11,
+        three_atom_indices_for_frame=(11, 8, 6),
     ),
     T=dict(
         resname="DT",
@@ -229,6 +256,7 @@ DNA_NUCLEOTIDES = dict(
         complement="A",
         distogram_atom_idx=13,
         token_center_atom_idx=11,
+        three_atom_indices_for_frame=(11, 8, 6),
     ),
     X=dict(
         resname="DN",
@@ -238,6 +266,7 @@ DNA_NUCLEOTIDES = dict(
         complement="N",
         distogram_atom_idx=21,
         token_center_atom_idx=11,
+        three_atom_indices_for_frame=None,
     ),
 )
 
@@ -250,6 +279,7 @@ RNA_NUCLEOTIDES = dict(
         complement="U",
         distogram_atom_idx=22,
         token_center_atom_idx=12,
+        three_atom_indices_for_frame=(12, 8, 6),
     ),
     C=dict(
         resname="C",
@@ -259,6 +289,7 @@ RNA_NUCLEOTIDES = dict(
         complement="G",
         distogram_atom_idx=14,
         token_center_atom_idx=12,
+        three_atom_indices_for_frame=(12, 8, 6),
     ),
     G=dict(
         resname="G",
@@ -268,6 +299,7 @@ RNA_NUCLEOTIDES = dict(
         complement="C",
         distogram_atom_idx=23,
         token_center_atom_idx=12,
+        three_atom_indices_for_frame=(12, 8, 6),
     ),
     U=dict(
         resname="U",
@@ -277,6 +309,7 @@ RNA_NUCLEOTIDES = dict(
         complement="A",
         distogram_atom_idx=14,
         token_center_atom_idx=12,
+        three_atom_indices_for_frame=(12, 8, 6),
     ),
     X=dict(
         resname="N",
@@ -286,6 +319,7 @@ RNA_NUCLEOTIDES = dict(
         complement="N",
         distogram_atom_idx=22,
         token_center_atom_idx=12,
+        three_atom_indices_for_frame=None,
     ),
 )
 
@@ -510,10 +544,15 @@ for entries in [*CHAINABLE_BIOMOLECULES, *METALS_AND_MISC]:
 for entries in CHAINABLE_BIOMOLECULES:
     for rescode in entries:
         entry = entries[rescode]
+        mol = entry['rdchem_mol']
         num_atoms = mol.GetNumAtoms()
 
         assert 0 <= entry["first_atom_idx"] < num_atoms
         assert 0 <= entry["last_atom_idx"] < num_atoms
         assert 0 <= entry["distogram_atom_idx"] < num_atoms
         assert 0 <= entry["token_center_atom_idx"] < num_atoms
+
+        if exists(entry.get('three_atom_indices_for_frame', None)):
+            assert all([(0 <= i < num_atoms) for i in entry["three_atom_indices_for_frame"]])
+
         assert entry["first_atom_idx"] != entry["last_atom_idx"]
