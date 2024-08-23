@@ -27,6 +27,9 @@ import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Literal, Optional, Set, Tuple, Union
 
+FORCE_SINGLE_PROCESS = True
+from contextlib import nullcontext
+
 import numpy as np
 import polars as pl
 from Bio.Data import PDBData
@@ -297,24 +300,37 @@ def parse_chain_sequences_and_interfaces_from_mmcif_directory(
 
     mmcif_filepaths = list(glob.glob(os.path.join(mmcif_dir, "*", "*.cif")))
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                parse_chain_sequences_and_interfaces_from_mmcif_file,
-                cif_filepath,
-                assume_one_based_residue_ids,
-            ): cif_filepath
-            for cif_filepath in mmcif_filepaths
-        }
-        for future in tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc="Parsing chain sequences and interfaces",
-        ):
-            structure_id, chain_sequences, interface_chain_ids = future.result()
+    if FORCE_SINGLE_PROCESS:
+        for cif_filepath in tqdm(mmcif_filepaths, total=len(mmcif_filepaths)):
+            try:
+                structure_id, chain_sequences, interface_chain_ids = parse_chain_sequences_and_interfaces_from_mmcif_file(
+                    cif_filepath,
+                    assume_one_based_residue_ids,
+                )
+            except:
+                continue
             if chain_sequences:
                 all_chain_sequences.append({structure_id: chain_sequences})
                 all_interface_chain_ids[structure_id] = list(interface_chain_ids)
+    else:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    parse_chain_sequences_and_interfaces_from_mmcif_file,
+                    cif_filepath,
+                    assume_one_based_residue_ids,
+                ): cif_filepath
+                for cif_filepath in mmcif_filepaths
+            }
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Parsing chain sequences and interfaces",
+            ):
+                structure_id, chain_sequences, interface_chain_ids = future.result()
+                if chain_sequences:
+                    all_chain_sequences.append({structure_id: chain_sequences})
+                    all_interface_chain_ids[structure_id] = list(interface_chain_ids)
 
     return all_chain_sequences, all_interface_chain_ids
 
@@ -738,7 +754,7 @@ if __name__ == "__main__":
             interface_chain_ids = json.load(f)
     else:
         # Parse all chain sequences and interfaces from mmCIF files
-
+        print('about to start parse_chain_sequences_and_interfaces_from_mmcif_directory ...')
         (
             all_chain_sequences,
             interface_chain_ids,
@@ -747,6 +763,8 @@ if __name__ == "__main__":
             max_workers=args.no_workers,
             assume_one_based_residue_ids=args.clustering_filtered_pdb_dataset,
         )
+
+        print('done parse_chain_sequences_and_interfaces_from_mmcif_directory for', args.mmcif_dir)
 
         # Cache chain sequences and interfaces to local storage
 

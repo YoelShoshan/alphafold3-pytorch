@@ -32,7 +32,7 @@ from loguru import logger
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem
 from tqdm import tqdm
-
+FORCE_SINGLE_PROCESS = True
 from alphafold3_pytorch.models.components.inputs import CCD_COMPONENTS_SMILES
 from alphafold3_pytorch.tensor_typing import typecheck
 from alphafold3_pytorch.utils.utils import exists
@@ -230,10 +230,13 @@ def filter_chains_by_sequence_names(
     filtered_chain_sequences = []
     filtered_interface_chain_ids = defaultdict(set)
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        future_to_structure = {
-            executor.submit(
-                filter_structure_chain_sequences,
+    if FORCE_SINGLE_PROCESS:
+        for structure_chain_sequences in tqdm(all_chain_sequences, total=len(all_chain_sequences)):
+            (
+            structure_id,
+            filtered_structure_chain_sequences,
+            filtered_structure_interface_ids,
+            ) = filter_structure_chain_sequences(
                 structure_chain_sequences=structure_chain_sequences,
                 sequence_names=sequence_names,
                 interface_chain_ids=interface_chain_ids,
@@ -241,26 +244,46 @@ def filter_chains_by_sequence_names(
                 max_polymer_similarity=max_polymer_similarity,
                 max_ligand_similarity=max_ligand_similarity,
                 filtered_structure_ids=filtered_structure_ids,
-            ): structure_chain_sequences
-            for structure_chain_sequences in all_chain_sequences
-        }
+            )
 
-        for future in tqdm(
-            as_completed(future_to_structure),
-            total=len(future_to_structure),
-            desc="Filtering chain sequences by sequence names",
-        ):
-            (
-                structure_id,
-                filtered_structure_chain_sequences,
-                filtered_structure_interface_ids,
-            ) = future.result()
             if filtered_structure_chain_sequences:
                 filtered_chain_sequences.append({structure_id: filtered_structure_chain_sequences})
                 if interfaces_provided:
                     filtered_interface_chain_ids[structure_id] = filtered_structure_interface_ids[
                         structure_id
                     ]
+    else:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_structure = {
+                executor.submit(
+                    filter_structure_chain_sequences,
+                    structure_chain_sequences=structure_chain_sequences,
+                    sequence_names=sequence_names,
+                    interface_chain_ids=interface_chain_ids,
+                    reference_ligand_fps=reference_ligand_fps,
+                    max_polymer_similarity=max_polymer_similarity,
+                    max_ligand_similarity=max_ligand_similarity,
+                    filtered_structure_ids=filtered_structure_ids,
+                ): structure_chain_sequences
+                for structure_chain_sequences in all_chain_sequences
+            }
+
+            for future in tqdm(
+                as_completed(future_to_structure),
+                total=len(future_to_structure),
+                desc="Filtering chain sequences by sequence names",
+            ):
+                (
+                    structure_id,
+                    filtered_structure_chain_sequences,
+                    filtered_structure_interface_ids,
+                ) = future.result()
+                if filtered_structure_chain_sequences:
+                    filtered_chain_sequences.append({structure_id: filtered_structure_chain_sequences})
+                    if interfaces_provided:
+                        filtered_interface_chain_ids[structure_id] = filtered_structure_interface_ids[
+                            structure_id
+                        ]
 
     if interfaces_provided:
         filtered_chain_sequences = [
